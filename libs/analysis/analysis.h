@@ -7,6 +7,7 @@
 
 typedef struct stress {
     double value;
+    long int time;
     int index;
 } stress;
 
@@ -17,5 +18,7 @@ struct stress* median(struct stress* array, unsigned int size);
 struct timespec* startTimer();
 
 long int stopTimer(struct timespec* start);
+
+long int stopwatchTimer(struct timespec* start);
 
 #endif // ** CUDA_SMACOF_ANALYSIS **

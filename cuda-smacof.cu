@@ -10,6 +10,9 @@
 #include <stdbool.h>
 #include <string.h>
 #include <float.h>
+#include <vector>
+#include <iostream>
+#include <string>
 
 #include "distance.h"
 #include "guttman.h"
@@ -32,11 +35,13 @@ int main(int argc, char** argv) {
     int m;          // number of items / objects; aka 'N'
     int n;          // dimensions of high-dimensional space;
     int s;          // dimension of low-dimensional space; aka 'L'
-    double epsilon;    // threshhold for the stress variance; aka 'ε'
+    double epsilon; // threshhold for the stress variance; aka 'ε'
     int k_max;      // maximum number of iterations; aka 'MAX'
-    bool track_median;
+    int iterations; // number of test runs for gathering average performance
 
-    int iterations = false; // number of test runs for gathering average performance
+    bool track_median = false;
+    bool track_median_solution = false;
+    bool track_median_stresses = false;
 
     float* matrix;
 
@@ -47,8 +52,11 @@ int main(int argc, char** argv) {
     } else if(argc < 8) {
         fprintf(stderr, "\nToo Few Arguments\n");
         return 1;
-    } else if (argc == 9) {
-        track_median = (strncmp(argv[8], "median", 5) == 0) ? true : false;
+    }
+    if (argc > 8) {
+        track_median = (strncmp(argv[8], "median", 6) == 0) ? true : false;
+        track_median_solution = (strncmp(argv[8], "median_solution", 15) == 0) ? true : false;
+        track_median_stresses = (strncmp(argv[8], "median_stresses", 15) == 0) ? true : false;
     }
 
     blocks = atoi(argv[2]);
@@ -61,7 +69,7 @@ int main(int argc, char** argv) {
     // read in matrix from file
     readMatrix(argv[1], &matrix, &m, &n);
 
-    //fprintf(stderr, "\nM: %i, N: %i, S: %i\nBlocks: %i, Threads: %i\n", m, n, s, blocks, threads);
+    fprintf(stderr, "\nM: %i, N: %i\nBlocks: %i, Threads: %i", m, n, blocks, threads);
 
     size_t size_D = m*m*sizeof(float);     // total size in memeory of dissimilarity & distance arrays
     size_t size_Y = m*s*sizeof(float);     // total size in memory of low-dimensional array;
@@ -71,16 +79,26 @@ int main(int argc, char** argv) {
     float* Y = (float*)malloc(size_Y);          // MxS set of finding points in the low-dimensional space
     float* D = (float*)malloc(size_D);          // MxM matrix of euclidean distance in target-dimensional space; aka 'projD'
 
-    // Set up environment for tracking median results
     float* Y_med;
-    struct stress* Stresses;
+    struct stress* normalized_stresses;
+    std::vector<struct stress> stresses[iterations];
     if (track_median) {
-        Stresses = (struct stress*)malloc(iterations*sizeof(struct stress));
-        Y_med = (float*)malloc(size_Y*iterations);
-        for (int i = 0; i < (m*s*iterations); i++) {
-            Y_med[i] = 0.0;
+        normalized_stresses = (struct stress*)malloc(iterations*sizeof(struct stress));
+
+        if (track_median_solution) {
+            Y_med = (float*)malloc(size_Y*iterations);
+            for (int i = 0; i < (m*s*iterations); i++) {
+                Y_med[i] = 0.0;
+            }
         }
+
+        /*
+        if (track_median_stresses) {
+            stresses = (std::vector<double>)malloc(sizeof(std::vector<double>)*iterations);
+        }
+        */
     }
+
 
     // compute initial dissimiliary matrix
     computeEuclideanDistances(matrix, Delta, m, n, m*n*sizeof(float), size_D, blocks, threads);
@@ -120,13 +138,20 @@ int main(int argc, char** argv) {
             // update error and prev_stress values
             error = fabs(stress - prev_stress);
             prev_stress = stress;
+
+            if (track_median_stresses) {
+                //stresses[iter].push_back(stress);
+                stresses[iter].push_back((struct stress){stress, 0, stresses[iter].size()});
+            }
+
             stress = 0.0f;
 
             k += 1;
         }
 
         // end time
-        total_time += stopTimer(timer);
+        long int current_time = stopTimer(timer);
+        total_time += current_time;
 
         // compute normalized stress for comparing mapping quality
         stress = computeNormalizedStressSerial(Delta, D, m);
@@ -146,11 +171,14 @@ int main(int argc, char** argv) {
 
         // if tracking median results, 
         if (track_median) {
-            for (int i = 0; i < (m*s); i++) {
-                Y_med[(m*s*iter)+i] = Y[i];
+            if(track_median_solution) {
+                for (int i = 0; i < (m*s); i++) {
+                    Y_med[(m*s*iter)+i] = Y[i];
+                }
             }
-            Stresses[iter].value = stress;
-            Stresses[iter].index = iter;
+            normalized_stresses[iter].value = stress;
+            normalized_stresses[iter].index = iter;
+            normalized_stresses[iter].time = current_time;
         }
     }
 
@@ -160,20 +188,35 @@ int main(int argc, char** argv) {
 
     // if median is being tracked, print median results including median solution
     if (track_median) {
-        struct stress* med = median(Stresses, iterations);
-        printf("MEDIAN_STRESS: %0.8lf\nMEDIAN_SOLUTION: [\n", med->value);
-        for(int i = 0; i < m; i++) {
-            for(int j = 0; j < s; j++) {
-                printf("%0.8f", Y_med[(med->index*m*s)+(i*s)+j]);
-                if (j != s-1) {
-                    printf(" ");
+        struct stress* med = median(normalized_stresses, iterations);
+        printf("MEDIAN_STRESS: %0.8lf\nMEDIAN_TIME: %0.8lf\n", med->value, (double)(((long double)med->time)/((long double)BILLION)));
+
+        if (track_median_solution) {
+            printf("MEDIAN_SOLUTION: [\n");
+            for(int i = 0; i < m; i++) {
+                for(int j = 0; j < s; j++) {
+                    printf("%f", Y_med[(med->index*m*s)+(i*s)+j]);
+                    if (j != s-1) {
+                        printf(" ");
+                    }
                 }
+                printf("\n");
             }
-            printf("\n");
+            printf("]\n");
+
+            free(Y_med);
         }
-        printf("]\n");
-        free(Y_med);
-        free(Stresses);
+
+
+        if (track_median_stresses) {
+            printf("MEDIAN_STRESSES: [\n");
+            for (int i = 0; i < stresses[med->index].size(); i++) {
+                printf("%i, %0.8lf\n", stresses[med->index][i].index, stresses[med->index][i].value);
+            }
+            printf("]\n");
+        }
+
+        free(normalized_stresses);
     }
 
     free(matrix);

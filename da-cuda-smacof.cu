@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <float.h>
+#include <vector>
 
 #include "distance.h"
 #include "guttman.h"
@@ -34,10 +35,13 @@ int main(int argc, char** argv) {
     int s;          // dimension of low-dimensional space; aka 'L'
     double epsilon; // threshhold for the stress variance; aka 'ε'
     int k_max;      // maximum number of iterations; aka 'MAX'
-    float temp_min;
-    float alpha;
-    int iterations;
+    float temp_min; // minimum temperature before final run of smacof
+    float alpha;    // temperature reduction factor
+    int iterations; // number of test runs for gathering average performance
+
     bool track_median = false;
+    bool track_median_solution = false;
+    bool track_median_stresses = false;
 
     float* matrix;
 
@@ -48,8 +52,11 @@ int main(int argc, char** argv) {
     } else if(argc < 10) {
         fprintf(stderr, "\nToo Few Arguments\n");
         return 1;
-    } else if (argc == 11) {
-        track_median = (strncmp(argv[10], "median", 5) == 0) ? true : false;
+    }
+    if (argc > 10) {
+        track_median = (strncmp(argv[10], "median", 6) == 0) ? true : false;
+        track_median_solution = (strncmp(argv[10], "median_solution", 15) == 0) ? true : false;
+        track_median_stresses = (strncmp(argv[10], "median_stresses", 15) == 0) ? true : false;
     }
 
     blocks = atoi(argv[2]);
@@ -76,13 +83,23 @@ int main(int argc, char** argv) {
     float* D = (float*)malloc(size_D);          // MxM matrix of euclidean distance in target-dimensional space; aka 'projD'
 
     float* Y_med;
-    struct stress* Stresses;
+    struct stress* normalized_stresses;
+    std::vector<struct stress> stresses[iterations];
     if (track_median) {
-        Stresses = (struct stress*)malloc(iterations*sizeof(struct stress));
-        Y_med = (float*)malloc(size_Y*iterations);
-        for (int i = 0; i < (m*s*iterations); i++) {
-            Y_med[i] = 0.0;
+        normalized_stresses = (struct stress*)malloc(iterations*sizeof(struct stress));
+
+        if (track_median_solution) {
+            Y_med = (float*)malloc(size_Y*iterations);
+            for (int i = 0; i < (m*s*iterations); i++) {
+                Y_med[i] = 0.0;
+            }
         }
+
+        /*
+        if (track_median_stresses) {
+            stresses = (std::vector<double>)malloc(sizeof(std::vector<double)*iterations);
+        }
+        */
     }
 
     // Generate Dissimilarity matrix Delta from matrix
@@ -153,6 +170,13 @@ int main(int argc, char** argv) {
                 // update error and prev_stress values
                 error = fabs(stress - prev_stress);
                 prev_stress = stress;
+
+                // if tracking stresses, push stress to vector
+                if (track_median_stresses) {
+                    stress = computeStress(Delta, D, size_D, m, blocks, threads);
+                    stresses[iter].push_back((struct stress){stress, 0, stresses[iter].size()});
+                }
+                
                 stress = 0.0f;
 
                 k += 1;
@@ -172,8 +196,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        // end time
-        total_time += stopTimer(timer);
+       // end time
+       long int current_time = stopTimer(timer);
+       total_time += current_time;
 
         // compute normalized stress for comparing mapping quality
         stress = computeNormalizedStressSerial(Delta, D, m);
@@ -193,11 +218,14 @@ int main(int argc, char** argv) {
 
         // if tracking median results, 
         if (track_median) {
-            for (int i = 0; i < (m*s); i++) {
-                Y_med[(m*s*iter)+i] = Y[i];
+            if(track_median_solution) {
+                for (int i = 0; i < (m*s); i++) {
+                    Y_med[(m*s*iter)+i] = Y[i];
+                }
             }
-            Stresses[iter].value = stress;
-            Stresses[iter].index = iter;
+            normalized_stresses[iter].value = stress;
+            normalized_stresses[iter].index = iter;
+            normalized_stresses[iter].time = current_time;
         }
     }
 
@@ -205,22 +233,40 @@ int main(int argc, char** argv) {
     printf("\nAVG_TIME: %lf\nAVG_STRESS: %0.8lf\nMAX_STRESS: %0.8lf\nMIN_STRESS: %0.8lf\n", (double)(((long double)total_time/(long double)iterations)/(long double)BILLION), (total_stress/((double)iterations)), max_stress, min_stress);
 
 
-    // if median is being tracked, print median results including median solution
+    // if median is being tracked, print median results
     if (track_median) {
-        struct stress* med = median(Stresses, iterations);
-        printf("MEDIAN_STRESS: %0.8lf\nMEDIAN_SOLUTION: [\n", med->value);
-        for(int i = 0; i < m; i++) {
-            for(int j = 0; j < s; j++) {
-                printf("%f", Y_med[(med->index*m*s)+(i*s)+j]);
-                if (j != s-1) {
-                    printf(" ");
+        struct stress* med = median(normalized_stresses, iterations);
+        printf("MEDIAN_STRESS: %0.8lf\nMEDIAN_TIME: %0.8lf\n", med->value, (double)(((long double)med->time)/((long double)BILLION)));
+
+
+        // if being tracked, print median solution
+        if (track_median_solution) {
+            printf("MEDIAN_SOLUTION: [\n");
+            for(int i = 0; i < m; i++) {
+                for(int j = 0; j < s; j++) {
+                    printf("%f", Y_med[(med->index*m*s)+(i*s)+j]);
+                    if (j != s-1) {
+                        printf(" ");
+                    }
                 }
+                printf("\n");
             }
-            printf("\n");
+            printf("]\n");
+
+            free(Y_med);
         }
-        printf("]\n");
-        free(Y_med);
-        free(Stresses);
+
+
+        // if being tracked, print stresses from median iteration
+        if (track_median_stresses) {
+            printf("MEDIAN_STRESSES: [\n");
+            for (int i = 0; i < stresses[med->index].size(); i++) {
+                printf("%i, %0.8lf\n", stresses[med->index][i].index, stresses[med->index][i].value);
+            }
+            printf("]\n");
+        }
+
+        free(normalized_stresses);
     }
 
     free(matrix);
