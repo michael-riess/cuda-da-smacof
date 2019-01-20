@@ -56,7 +56,7 @@ void computeNewDissimilarity(float* Delta, float* Delta_prime, size_t size_D, fl
     float* cuda_Delta;
     __cuda__( cudaMalloc(&cuda_Delta, size_D) );
     __cuda__( cudaMemcpy(cuda_Delta, Delta, size_D, cudaMemcpyHostToDevice) );
-    newDissimilarity<<<blocks, threads>>>(cuda_Delta, m, (float)(temp*sqrt((double)(2.0*s))));
+    newDissimilarity<<<blocks, threads>>>(cuda_Delta, m, (float)(temp*sqrt((double)(2.0 * s))));
     __cuda__( cudaPeekAtLastError() );
     __cuda__( cudaMemcpy(Delta_prime, cuda_Delta, size_D, cudaMemcpyDeviceToHost) );
     __cuda__( cudaFree(cuda_Delta) );
@@ -78,6 +78,6 @@ float computeTemperature(float* Delta, size_t size_D, int m, int s) {
     __cuda__( cudaPeekAtLastError() );
     __cuda__( cudaFree(cuda_Delta) );
 
-    // return temperature s.t. at least one new dissimiliary value is 1
-    return (float)((double)(max-1.0))/(sqrt((double)(2.0*s)));
+    // return temperature s.t. at least one new dissimiliary value is > 0
+    return (float)((double)(max * 0.90f))/(sqrt((double)(2.0 * s)));
 }

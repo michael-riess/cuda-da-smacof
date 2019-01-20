@@ -39,9 +39,9 @@ int main(int argc, char** argv) {
     int k_max;      // maximum number of iterations; aka 'MAX'
     int iterations; // number of test runs for gathering average performance
 
-    bool track_median = false;
-    bool track_median_solution = false;
-    bool track_median_stresses = false;
+    bool track_median;          // flag for tracking statistics from median solution
+    bool track_median_solution; // flag for tracking median solution
+    bool track_median_stresses; // flag for tracking stresses from median solution
 
     float* matrix;
 
@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
         track_median_stresses = (strncmp(argv[8], "median_stresses", 15) == 0) ? true : false;
     }
 
+    // parse arguments
     blocks = atoi(argv[2]);
     threads = atoi(argv[3]);
     s = atoi(argv[4]);
@@ -91,14 +92,7 @@ int main(int argc, char** argv) {
                 Y_med[i] = 0.0;
             }
         }
-
-        /*
-        if (track_median_stresses) {
-            stresses = (std::vector<double>)malloc(sizeof(std::vector<double>)*iterations);
-        }
-        */
     }
-
 
     // compute initial dissimiliary matrix
     computeEuclideanDistances(matrix, Delta, m, n, m*n*sizeof(float), size_D, blocks, threads);
@@ -133,7 +127,7 @@ int main(int argc, char** argv) {
             computeEuclideanDistances(Y, D, m, s, size_Y, size_D, blocks, threads);
 
             //calculate STRESS
-            stress = computeStress(Delta, D, size_D, m, blocks, threads);
+            stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
 
             // update error and prev_stress values
             error = fabs(stress - prev_stress);
@@ -154,7 +148,7 @@ int main(int argc, char** argv) {
         total_time += current_time;
 
         // compute normalized stress for comparing mapping quality
-        stress = computeNormalizedStressSerial(Delta, D, m);
+        stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
 
         // sum stress values for computing average stress
         total_stress += stress;
@@ -191,6 +185,7 @@ int main(int argc, char** argv) {
         struct stress* med = median(normalized_stresses, iterations);
         printf("MEDIAN_STRESS: %0.8lf\nMEDIAN_TIME: %0.8lf\n", med->value, (double)(((long double)med->time)/((long double)BILLION)));
 
+        // if being tracked, print median solution
         if (track_median_solution) {
             printf("MEDIAN_SOLUTION: [\n");
             for(int i = 0; i < m; i++) {

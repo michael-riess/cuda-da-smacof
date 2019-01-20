@@ -39,9 +39,9 @@ int main(int argc, char** argv) {
     float alpha;    // temperature reduction factor
     int iterations; // number of test runs for gathering average performance
 
-    bool track_median = false;
-    bool track_median_solution = false;
-    bool track_median_stresses = false;
+    bool track_median;          // flag for tracking statistics from median solution
+    bool track_median_solution; // flag for tracking median solution
+    bool track_median_stresses; // flag for tracking stresses from median solution
 
     float* matrix;
 
@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
         track_median_stresses = (strncmp(argv[10], "median_stresses", 15) == 0) ? true : false;
     }
 
+    // parse arguments
     blocks = atoi(argv[2]);
     threads = atoi(argv[3]);
     s = atoi(argv[4]);
@@ -71,8 +72,7 @@ int main(int argc, char** argv) {
     // read in matrix from file
     readMatrix(argv[1], &matrix, &m, &n);
 
-
-    //fprintf(stderr, "\nM: %i, N: %i\nBlocks: %i, Threads: %i", m, n, blocks, threads);
+    fprintf(stderr, "\nM: %i, N: %i\nBlocks: %i, Threads: %i", m, n, blocks, threads);
 
     size_t size_D = m*m*sizeof(float);     // total size in memeory of dissimilarity & distance arrays
     size_t size_Y = m*s*sizeof(float);     // total size in memory of low-dimensional array;
@@ -94,12 +94,6 @@ int main(int argc, char** argv) {
                 Y_med[i] = 0.0;
             }
         }
-
-        /*
-        if (track_median_stresses) {
-            stresses = (std::vector<double>)malloc(sizeof(std::vector<double)*iterations);
-        }
-        */
     }
 
     // Generate Dissimilarity matrix Delta from matrix
@@ -156,7 +150,7 @@ int main(int argc, char** argv) {
                     computeEuclideanDistances(Y, D, m, s, size_Y, size_D, blocks, threads);
 
                     //calculate STRESS
-                    stress = computeStress(Delta_prime, D, size_D, m, blocks, threads);
+                    stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
                 
                 } else {
                     // perform guttman transform
@@ -164,7 +158,7 @@ int main(int argc, char** argv) {
                     computeEuclideanDistances(Y, D, m, s, size_Y, size_D, blocks, threads);
 
                     //calculate STRESS
-                    stress = computeStress(Delta, D, size_D, m, blocks, threads);
+                    stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
                 }
 
                 // update error and prev_stress values
@@ -201,7 +195,7 @@ int main(int argc, char** argv) {
        total_time += current_time;
 
         // compute normalized stress for comparing mapping quality
-        stress = computeNormalizedStressSerial(Delta, D, m);
+        stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
 
         // sum stress values for computing average stress
         total_stress += stress;
@@ -238,7 +232,6 @@ int main(int argc, char** argv) {
         struct stress* med = median(normalized_stresses, iterations);
         printf("MEDIAN_STRESS: %0.8lf\nMEDIAN_TIME: %0.8lf\n", med->value, (double)(((long double)med->time)/((long double)BILLION)));
 
-
         // if being tracked, print median solution
         if (track_median_solution) {
             printf("MEDIAN_SOLUTION: [\n");
@@ -255,7 +248,6 @@ int main(int argc, char** argv) {
 
             free(Y_med);
         }
-
 
         // if being tracked, print stresses from median iteration
         if (track_median_stresses) {

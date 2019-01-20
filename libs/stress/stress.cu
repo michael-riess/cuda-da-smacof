@@ -20,7 +20,7 @@ inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort=
 
 /* KERNEL: Populate the addends array with the set of stress addends (values when summed will equal the stress value)
 */
-__global__ void generateStressAddends(float* Delta, float* D, double* addends, int dataRows) {
+__global__ void generateStressAddends(float* Delta, float* D, double* addends, double weight, int dataRows) {
     for (unsigned int ix = blockIdx.x * blockDim.x + threadIdx.x;
         ix < (dataRows * (dataRows + 1) / 2);
         ix += blockDim.x * gridDim.x
@@ -40,25 +40,27 @@ __global__ void generateStressAddends(float* Delta, float* D, double* addends, i
         if (i != j) {
             n = (double)Delta[(i * dataRows) + j] - (double)D[(i * dataRows) + j]; //use doubles to preserve precision   
         }
-        addends[ix] = (n*n);
+        addends[ix] = (weight*(n*n));
     }
 }
 
+
 /* Compute stress with the aid of the gpu
 */
-double computeStress(float* Delta, float* D, size_t size_D, int m, int blocks, int threads){
+double computeStress(float* Delta, float* D, size_t size_D, double weight, int m, int blocks, int threads){
     size_t lowerTriangleSize = ((m * (m + 1)) / 2);
+
+    float* cuda_Delta;
+    float* cuda_D;
 
     // create array of stress addends
     double* cuda_stressAddends;
-    float* cuda_Delta;
-    float* cuda_D;
     __cuda__( cudaMalloc(&cuda_Delta, size_D) );
     __cuda__( cudaMalloc(&cuda_D, size_D) );
     __cuda__( cudaMalloc(&cuda_stressAddends, (lowerTriangleSize * sizeof(double))) );
     __cuda__( cudaMemcpy(cuda_Delta, Delta, size_D, cudaMemcpyHostToDevice) );
     __cuda__( cudaMemcpy(cuda_D, D, size_D, cudaMemcpyHostToDevice) );
-    generateStressAddends<<<blocks, threads>>>(cuda_Delta, cuda_D, cuda_stressAddends, m);
+    generateStressAddends<<<blocks, threads>>>(cuda_Delta, cuda_D, cuda_stressAddends, weight, m);
     __cuda__( cudaPeekAtLastError() );
     __cuda__( cudaDeviceSynchronize() );
     __cuda__( cudaFree(cuda_Delta) );
@@ -73,6 +75,80 @@ double computeStress(float* Delta, float* D, size_t size_D, int m, int blocks, i
 
     return stress;
 }
+
+
+/* KERNEL: Populate the addends array with the set of normalized stress weight denominator values
+*/
+__global__ void generateNormalizedStressDenominatorAddends(float* Delta, double* addends, int dataRows) {
+    for (unsigned int ix = blockIdx.x * blockDim.x + threadIdx.x;
+        ix < (dataRows * (dataRows + 1) / 2);
+        ix += blockDim.x * gridDim.x
+    ){
+        
+        // generate 2D indeces from 1D index, ix, in flattened matrix.
+        int i = ix / (dataRows + 1);
+        int j = ix % (dataRows + 1);
+        // if generated indeces lie outside of lower triangle, generate new ones inside it
+        if (j > i) {
+            i = dataRows - i - 1;
+            j = dataRows - j;
+        }
+
+        // generate and insert stress weight denominator addend into array for later summation
+        if (i != j) {
+            addends[ix] = (double)Delta[(i * dataRows) + j] * (double)Delta[(i * dataRows) + j]; //use doubles to preserve precision   
+        } else {
+            addends[ix] = 0.0f;
+        }
+    }
+}
+
+
+/* Computes normalized stress with the aid of the gpu
+*/
+double computeNormalizedStress(float* Delta, float* D, size_t size_D, int m, int blocks, int threads) {
+    size_t lowerTriangleSize = ((m * (m + 1)) / 2);
+
+    float* cuda_Delta;
+    float* cuda_D;
+
+    // create array of normalized stress denominator addends
+    double* cuda_denominatorAddends;
+    __cuda__( cudaMalloc(&cuda_Delta, size_D) );
+    __cuda__( cudaMalloc(&cuda_stressAddends, (lowerTriangleSize * sizeof(double))) );
+    __cuda__( cudaMemcpy(cuda_Delta, Delta, size_D, cudaMemcpyHostToDevice) );
+    generateNormalizedStressDenominatorAddends<<<blocks, threads>>>(Delta, cuda_denominatorAddends, m);
+    __cuda__( cudaPeekAtLastError() );
+    __cuda__( cudaDeviceSynchronize() );
+
+    //sum reduction on all normalized stress weight denominator addends
+    thrust::device_ptr<double> d_ptr = thrust::device_pointer_cast(cuda_denominatorAddends);
+    __cuda__( cudaPeekAtLastError() );
+    double weight = 1.0f / thrust::reduce(d_ptr, (d_ptr + lowerTriangleSize));
+    __cuda__( cudaDeviceSynchronize() );
+    __cuda__( cudaFree(cuda_denominatorAddends) );
+
+    // create array of normalized stress addends
+    double* cuda_stressAddends;
+    __cuda__( cudaMalloc(&cuda_D, size_D) );
+    __cuda__( cudaMalloc(&cuda_stressAddends, (lowerTriangleSize * sizeof(double))) );
+    __cuda__( cudaMemcpy(cuda_D, D, size_D, cudaMemcpyHostToDevice) );
+    generateStressAddends<<<blocks, threads>>>(cuda_Delta, cuda_D, cuda_stressAddends, weight, m);
+    __cuda__( cudaPeekAtLastError() );
+    __cuda__( cudaDeviceSynchronize() );
+    __cuda__( cudaFree(cuda_Delta) );
+    __cuda__( cudaFree(cuda_D) );
+
+    //sum reduction on all normalized stress addends
+    thrust::device_ptr<double> d_ptr = thrust::device_pointer_cast(cuda_stressAddends);
+    __cuda__( cudaPeekAtLastError() );
+    double stress = thrust::reduce(d_ptr, (d_ptr + lowerTriangleSize));
+    __cuda__( cudaDeviceSynchronize() );
+    __cuda__( cudaFree(cuda_stressAddends) );
+
+    return stress;
+}
+
 
 /* Computes normalized stress without the aid of the gpu.
 */
