@@ -67,6 +67,7 @@ long int stopTimer(struct timespec* start) {
     return time;
 }
 
+
 /* Returns total time from start of timer till this call, for evalutiong performace.
 *  Total time calculated includes that taken by cpu bound execution, and that taken by gpu where cpu is idle.
 *  Unlike "stopTimer", "stopwatchTimer" does not free memory allocated by "startTimer".

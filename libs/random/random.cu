@@ -37,7 +37,7 @@ __global__ void cuda_rand(curandState *state, float *matrix, unsigned int size) 
         idx < size;
         idx += blockDim.x * gridDim.x
     ){
-        matrix[idx] = curand_uniform(&state[idx]);
+        matrix[idx] = curand_uniform(&state[idx])*10.0f;
     }
 }
 
@@ -59,4 +59,14 @@ void matrixRandomPopulate(float* matrix, int m, int s, int blocks, int threads) 
     __cuda__( cudaMemcpy(matrix, cuda_matrix, m*s*sizeof(float), cudaMemcpyDeviceToHost) );
     __cuda__( cudaFree(cuda_matrix) );
     __cuda__( cudaFree(cuda_state) );
+}
+
+
+/* Populate initial solution matrix with pseudorandom values between 0 and 10
+*/
+void matrixRandomPopulateSerial(float* matrix, int m, int s) {
+    srand(time(NULL));
+    for (int i = 0; i < (m * s); i++) {
+        matrix[i] = (float)(rand() % 10); ///rand() / (1.0f + RAND_MAX) * 10.0f;
+    }
 }

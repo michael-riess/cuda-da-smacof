@@ -103,7 +103,7 @@ __global__ void moorePenroseInverse(float* V, int dataRows) {
 }
 
 
-/* Compute the Guttman Transform
+/* Compute the Guttman Transform with gpu
 *  Y` <= V` * B * Y
 */
 void computeGuttmanTransform(cublasHandle_t handle, float* Y, float* D, float* Delta, int m, int s, size_t size_Y, size_t size_D, int blocks, int threads) {
@@ -177,4 +177,79 @@ void computeGuttmanTransform(cublasHandle_t handle, float* Y, float* D, float* D
     __cuda__( cudaFree(cuda_B_prime) );
     __cuda__( cudaFree(cuda_Y) );
     __cuda__( cudaFree(cuda_Y_prime) );
+}
+
+
+
+void matrixMultiplySerial(float* A, float* B, float* C, int a_m, int a_n, int b_m, int b_n) {
+    if (a_n != b_m) {
+        return;
+    }
+    for (int i = 0; i < a_m; i++) {
+        for (int j = 0; j < b_n; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < b_m; k++) {
+                sum = sum + A[(i * a_n) + k] * B[(k * b_n) + j];
+            }
+            C[(i * b_n) + j] = sum;
+        }
+    }
+}
+
+
+/* Compute the Guttman Transform without gpu
+*  Y` <= V` * B * Y
+*/
+void computeGuttmanTransformSerial(float** Y, float* D, float* Delta, int m, int s, size_t size_Y, size_t size_D) {
+    float* B = (float*)malloc(size_D);
+    float* V = (float*)malloc(size_D);
+    float* C = (float*)malloc(size_D);
+    float* Y_prime;
+
+    // generate guttman transform matrix
+    // calculate non-diagonal values
+    for (int i = 0; i < m; i++) {
+        for (int j = i; j < m; j++) {
+            int ix = (i * m) + j;
+            if (i == j || D[ix] == 0.0f) {
+                B[ix] = 0.0f;
+            } else {
+                B[ix] = -(Delta[ix]) / D[ix];
+            }
+            B[(j * m) + i] = B[ix];
+        }
+    }
+
+    // calculate diagonal values
+    for (int i = 0; i < m; i++) {
+        for (int k = 0; k < m; k++){
+            if(i != k) {                          
+                B[(i * m) + i] -= B[(i * m) + k];
+            }
+        }
+    }
+
+    // generate moore-penrose inverse matrix
+    float N = (float)m;
+    for (int i = 0; i < m; i ++) {
+        for (int j = i; j < m; j++){
+            if (j != i) {
+                V[j * m + i] = -1.0f/(N*N);
+                V[i * m + j] = V[j * m + i];
+            } else {
+                V[j * m + i] = (N-1.0f)/(N*N);
+            }
+        }
+    }
+
+    // perform guttman transform
+    matrixMultiplySerial(V, B, C, m, m, m, m);
+    free(B);
+    free(V);
+    Y_prime = (float*)malloc(size_Y);
+    matrixMultiplySerial(C, *Y, Y_prime, m, m, m, s);
+    free(C);
+    C = *Y;
+    *Y = Y_prime;
+    free(C);
 }

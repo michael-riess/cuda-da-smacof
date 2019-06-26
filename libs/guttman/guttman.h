@@ -6,4 +6,6 @@
 
 void computeGuttmanTransform(cublasHandle_t handle, float* Y, float* D, float* Delta, int m, int s, size_t size_Y, size_t size_D, int blocks, int threads);
 
+void computeGuttmanTransformSerial(float** Y, float* D, float* Delta, int m, int s, size_t size_Y, size_t size_D);
+
 #endif // ** UDA_SMACOF_GUTTMAN **

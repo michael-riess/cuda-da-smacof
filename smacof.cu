@@ -11,6 +11,8 @@
 #include <string.h>
 #include <float.h>
 #include <vector>
+#include <iostream>
+#include <string>
 #include <limits.h>
 
 #include "distance.h"
@@ -24,20 +26,12 @@
 
 // Host code
 int main(int argc, char** argv) {
-
-    cublasHandle_t handle;
-    cublasCreate_v2(&handle);
-
-    int blocks;     //number of blocks
-    int threads;    //number of threads per block
     
     int m;          // number of items / objects; aka 'N'
     int n;          // dimensions of high-dimensional space;
     int s;          // dimension of low-dimensional space; aka 'L'
     double epsilon; // threshhold for the stress variance; aka 'ε'
     int k_max;      // maximum number of iterations; aka 'MAX'
-    float temp_min; // minimum temperature before final run of smacof
-    float alpha;    // temperature reduction factor
     int iterations; // number of test runs for gathering average performance
 
     bool track_median;          // flag for tracking statistics from median solution
@@ -47,33 +41,29 @@ int main(int argc, char** argv) {
     float* matrix;
 
     // validate arguments
-    if(argc > 11) {
+    if(argc > 7) {
         fprintf(stderr, "\nToo Many Arguments\n");
         return 1;
-    } else if(argc < 10) {
+    } else if(argc < 6) {
         fprintf(stderr, "\nToo Few Arguments\n");
         return 1;
     }
-    if (argc > 10) {
-        track_median = (strncmp(argv[10], "median", 6) == 0) ? true : false;
-        track_median_solution = (strncmp(argv[10], "median_solution", 15) == 0) ? true : false;
-        track_median_stresses = (strncmp(argv[10], "median_stresses", 15) == 0) ? true : false;
+    if (argc > 6) {
+        track_median = (strncmp(argv[6], "median", 6) == 0) ? true : false;
+        track_median_solution = (strncmp(argv[6], "median_solution", 15) == 0) ? true : false;
+        track_median_stresses = (strncmp(argv[6], "median_stresses", 15) == 0) ? true : false;
     }
 
     // parse arguments
-    blocks = atoi(argv[2]);
-    threads = atoi(argv[3]);
-    s = atoi(argv[4]);
-    epsilon = strtof(argv[5], NULL);
-    k_max = atoi(argv[6]);
-    temp_min = strtof(argv[7], NULL);
-    alpha = strtof(argv[8], NULL);
-    iterations = atoi(argv[9]);
+    s = atoi(argv[2]);
+    epsilon = strtof(argv[3], NULL);
+    k_max = atoi(argv[4]);
+    iterations = atoi(argv[5]);
 
     // read in matrix from file
     readMatrix(argv[1], &matrix, &m, &n);
 
-    fprintf(stderr, "\nM: %i, N: %i\nBlocks: %i, Threads: %i", m, n, blocks, threads);
+    fprintf(stderr, "\nM: %i, N: %i\n", m, n);
 
     size_t size_D = m*m*sizeof(float);     // total size in memeory of dissimilarity & distance arrays
     size_t size_Y = m*s*sizeof(float);     // total size in memory of low-dimensional array;
@@ -97,8 +87,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Generate Dissimilarity matrix Delta from matrix
-    computeEuclideanDistances(matrix, Delta, m, n, m*n*sizeof(float), size_D, blocks, threads);
+    // compute initial dissimiliary matrix
+    computeEuclideanDistancesSerial(matrix, Delta, m, n);
 
     double total_stress = 0.0;
     double max_stress = 0.0;
@@ -108,100 +98,49 @@ int main(int argc, char** argv) {
     unsigned long min_time = ULONG_MAX;
     struct timespec* timer;
 
+
     for(int iter = 0; iter < iterations; iter++) {
         
         timer = startTimer();
 
         // create initial random solution Y^[0]
-        matrixRandomPopulate(Y, m, s, blocks, threads);
+        matrixRandomPopulateSerial(Y, m, s);
 
         // compute first distance matrix from random Y^[0]
-        computeEuclideanDistances(Y, D, m, s, size_Y, size_D, blocks, threads);
-
+        computeEuclideanDistancesSerial(Y, D, m, s);
         
-        float temp = computeTemperature(Delta, size_D, m, s);
+        int k = 0;          // current interation
+        double error = 1.0f;// error value to determine if close enough approximation in lower dimensional space
 
-        int k;          // current interation
-        double error;   // error value to determine if close enough approximation in lower dimensional space
+        double prev_stress = 0.0f;
+        double stress = 0.0f;
 
-        double prev_stress;
-        double stress;
+        while(k < k_max && error > epsilon) {
 
-        bool moreTemps = true;
+            // perform guttman transform
+            computeGuttmanTransformSerial(&Y, D, Delta, m, s, size_Y, size_D);
+            computeEuclideanDistancesSerial(Y, D, m, s);
 
-        // if tracking stresses, document initial stress
-        if (track_median_stresses) {
-            stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
-            stresses[iter].push_back((struct stress){stress, 0, stresses[iter].size()});
+            // calculate STRESS
+            stress = computeNormalizedStressSerial(Delta, D, m);
+
+            // update error and prev_stress values
+            error = fabs(stress - prev_stress);
+            prev_stress = stress;
+
+            if (track_median_stresses) {
+                stresses[iter].push_back((struct stress){stress, 0, stresses[iter].size()});
+            }
+
             stress = 0.0f;
+
+            k += 1;
         }
 
-        while(moreTemps) {
-            k = 0;          // current interation
-            error = 1.0f;   // error value to determine if close enough approximation in lower dimensional space
-        
-            prev_stress = 0.0f;
-            stress = 0.0f;
+        // end time
+        long int current_time = stopTimer(timer);
+        total_time += current_time;
 
-
-            if (temp > 0) {
-                computeNewDissimilarity(Delta, Delta_prime, size_D, temp, m, s, blocks, threads);
-            } else {
-                // compute first distance matrix from random Y^[0]
-                computeEuclideanDistances(Y, D, m, s, size_Y, size_D, blocks, threads);
-            }
-
-            // SMACOF
-            while(k < k_max && error > epsilon) {
-
-                if (temp > 0) {
-                    // perform guttman transform
-                    computeGuttmanTransform(handle, Y, D, Delta_prime, m, s, size_Y, size_D, blocks, threads);
-                    computeEuclideanDistances(Y, D, m, s, size_Y, size_D, blocks, threads);
-
-                    //calculate STRESS
-                    stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
-                
-                } else {
-                    // perform guttman transform
-                    computeGuttmanTransform(handle, Y, D, Delta, m, s, size_Y, size_D, blocks, threads);
-                    computeEuclideanDistances(Y, D, m, s, size_Y, size_D, blocks, threads);
-
-                    //calculate STRESS
-                    stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
-                }
-
-                // update error and prev_stress values
-                error = fabs(stress - prev_stress);
-                prev_stress = stress;
-
-                // if tracking stresses, push stress to vector
-                if (track_median_stresses) {
-                    stresses[iter].push_back((struct stress){stress, 0, stresses[iter].size()});
-                }
-                
-                stress = 0.0f;
-
-                k += 1;
-            }
-
-            // quit after running with temp of 0
-            if(temp == 0.0) {
-                moreTemps = false;
-
-            // run once more with temp of 0 once reached temp_min
-            } else if(temp < temp_min || (temp * alpha) < temp_min) {
-                temp = 0.0;
-            
-            // reduce temp by alpha and run smacof again
-            } else {
-                temp *= alpha;
-            }
-        }
-
-       // end time
-       long int current_time = stopTimer(timer);
-       total_time += current_time;
 
         if(current_time > max_time) {
             max_time = current_time;
@@ -212,7 +151,7 @@ int main(int argc, char** argv) {
         }
 
         // compute normalized stress for comparing mapping quality
-        stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
+        stress = computeNormalizedStressSerial(Delta, D, m);
 
         // sum stress values for computing average stress
         total_stress += stress;
@@ -222,7 +161,7 @@ int main(int argc, char** argv) {
             max_stress = stress;
         }
 
-        //maintain minimum stress
+        // maintain minimum stress
         if(stress < min_stress) {
             min_stress = stress;
         }
@@ -240,6 +179,7 @@ int main(int argc, char** argv) {
         }
     }
 
+
     // print time results
     printf("\nAVG_TIME: %0.8lf\n+MAX_TIME: %0.8lf\n-MIN_TIME: %0.8lf\n",
         (double)(((long double)total_time/(long double)iterations)/(long double)BILLION),   // average time
@@ -254,7 +194,10 @@ int main(int argc, char** argv) {
         min_stress                              // min stress
     );
 
-    // if median is being tracked, print median results
+
+
+
+    // if median is being tracked, print median results including median solution
     if (track_median) {
         struct stress* med = median(normalized_stresses, iterations);
         printf("MEDIAN_STRESS: %0.8lf\nMEDIAN_TIME: %0.8lf\n", med->value, (double)(((long double)med->time)/((long double)BILLION)));
@@ -276,7 +219,7 @@ int main(int argc, char** argv) {
             free(Y_med);
         }
 
-        // if being tracked, print stresses from median iteration
+
         if (track_median_stresses) {
             printf("MEDIAN_STRESSES: [\n");
             for (int i = 0; i < stresses[med->index].size(); i++) {

@@ -115,9 +115,9 @@ double computeNormalizedStress(float* Delta, float* D, size_t size_D, int m, int
     // create array of normalized stress denominator addends
     double* cuda_denominatorAddends;
     __cuda__( cudaMalloc(&cuda_Delta, size_D) );
-    __cuda__( cudaMalloc(&cuda_stressAddends, (lowerTriangleSize * sizeof(double))) );
+    __cuda__( cudaMalloc(&cuda_denominatorAddends, (lowerTriangleSize * sizeof(double))) );
     __cuda__( cudaMemcpy(cuda_Delta, Delta, size_D, cudaMemcpyHostToDevice) );
-    generateNormalizedStressDenominatorAddends<<<blocks, threads>>>(Delta, cuda_denominatorAddends, m);
+    generateNormalizedStressDenominatorAddends<<<blocks, threads>>>(cuda_Delta, cuda_denominatorAddends, m);
     __cuda__( cudaPeekAtLastError() );
     __cuda__( cudaDeviceSynchronize() );
 
@@ -140,7 +140,7 @@ double computeNormalizedStress(float* Delta, float* D, size_t size_D, int m, int
     __cuda__( cudaFree(cuda_D) );
 
     //sum reduction on all normalized stress addends
-    thrust::device_ptr<double> d_ptr = thrust::device_pointer_cast(cuda_stressAddends);
+    d_ptr = thrust::device_pointer_cast(cuda_stressAddends);
     __cuda__( cudaPeekAtLastError() );
     double stress = thrust::reduce(d_ptr, (d_ptr + lowerTriangleSize));
     __cuda__( cudaDeviceSynchronize() );
@@ -160,7 +160,7 @@ double computeNormalizedStressSerial(float* Delta, float* D, int m) {
             weight += (Delta[(i*m)+j] * Delta[(i*m)+j]);
         }
     }
-    weight = 1.0/weight;
+    weight = 1.0f/weight;
     for(int i = 0; i < m; i++) {
         for(int j = i+1; j < m; j++) {
             double n = (Delta[(i*m)+j] - D[(i*m)+j]);

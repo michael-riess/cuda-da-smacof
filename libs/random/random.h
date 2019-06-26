@@ -6,4 +6,6 @@
 
 void matrixRandomPopulate(float* matrix, int m, int s, int blocks, int threads);
 
+void matrixRandomPopulateSerial(float* matrix, int m, int s);
+
 #endif // ** CUDA_SMACOF_RANDOM **

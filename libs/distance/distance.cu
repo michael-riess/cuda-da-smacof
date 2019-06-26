@@ -53,7 +53,7 @@ __global__ void euclideanDistance(float *data, float *D, int dataRows, int dataC
 }
 
 
-/* Compute matrix of euclidean distances between points in matrix Y
+/* Compute matrix of euclidean distances between points in matrix Y using gpu
 */
 void computeEuclideanDistances(float* Y, float* D, int m, int s, size_t size_Y, size_t size_D, int blocks, int threads) {
     float* cuda_Y;
@@ -74,4 +74,25 @@ void computeEuclideanDistances(float* Y, float* D, int m, int s, size_t size_Y, 
     // free gpu memory
     __cuda__( cudaFree(cuda_Y) );
     __cuda__( cudaFree(cuda_D) );
+}
+
+
+/* Compute matrix of euclidean distances between points in matrix Y without gpu
+*/
+void computeEuclideanDistancesSerial(float* Y, float* D, int m, int s) {
+    for (int i = 0; i < m; i++) {
+        for (int j = i; j < m; j++) {
+            float resta = 0.0f;
+            float suma = 0.0f;
+            if (i != j) {
+                for (int k = 0 ; k < s; k++) {
+                    resta = Y[(i * s) + k] - Y[(j * s) + k];
+                    suma += resta * resta;
+                }
+                suma = sqrt(suma);
+            }
+            D[(i * m) + j] = suma;
+            D[(j * m) + i] = suma;
+        }
+    }
 }

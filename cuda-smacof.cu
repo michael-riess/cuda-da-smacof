@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <float.h>
+#include <limits.h>
 #include <vector>
 #include <iostream>
 #include <string>
@@ -101,6 +102,8 @@ int main(int argc, char** argv) {
     double max_stress = 0.0;
     double min_stress = DBL_MAX;
     unsigned long total_time = 0;
+    unsigned long max_time = 0;
+    unsigned long min_time = ULONG_MAX;
     struct timespec* timer;
 
 
@@ -120,6 +123,13 @@ int main(int argc, char** argv) {
         double prev_stress = 0.0f;
         double stress = 0.0f;
 
+        // if tracking stresses, document initial stress
+        if (track_median_stresses) {
+            stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
+            stresses[iter].push_back((struct stress){stress, 0, stresses[iter].size()});
+            stress = 0.0f;
+        }
+
         while(k < k_max && error > epsilon) {
 
             // perform guttman transform
@@ -134,7 +144,6 @@ int main(int argc, char** argv) {
             prev_stress = stress;
 
             if (track_median_stresses) {
-                //stresses[iter].push_back(stress);
                 stresses[iter].push_back((struct stress){stress, 0, stresses[iter].size()});
             }
 
@@ -146,6 +155,15 @@ int main(int argc, char** argv) {
         // end time
         long int current_time = stopTimer(timer);
         total_time += current_time;
+
+        if(current_time > max_time) {
+            max_time = current_time;
+        }
+
+        if(current_time < min_time) {
+            min_time = current_time;
+        }
+
 
         // compute normalized stress for comparing mapping quality
         stress = computeNormalizedStress(Delta, D, size_D, m, blocks, threads);
@@ -176,8 +194,21 @@ int main(int argc, char** argv) {
         }
     }
 
-    // print average results after 'iterations' number of test
-    printf("\nAVG_TIME: %lf\nAVG_STRESS: %0.8lf\nMAX_STRESS: %0.8lf\nMIN_STRESS: %0.8lf\n", (double)(((long double)total_time/(long double)iterations)/(long double)BILLION), (total_stress/((double)iterations)), max_stress, min_stress);
+
+    // print time results
+    printf("\nAVG_TIME: %0.8lf\n+MAX_TIME: %0.8lf\n-MIN_TIME: %0.8lf\n",
+        (double)(((long double)total_time/(long double)iterations)/(long double)BILLION),   // average time
+        (double)((long double)max_time/(long double)BILLION),                               // max time
+        (double)((long double)min_time/(long double)BILLION)                                // min time
+    );
+
+
+    // print stress results
+    printf("\nAVG_STRESS: %0.8lf\n+MAX_STRESS: %0.8lf\n-MIN_STRESS: %0.8lf\n",
+        (total_stress/((double)iterations)),    // average stress     
+        max_stress,                             // max stress
+        min_stress                              // min stress
+    );
 
 
     // if median is being tracked, print median results including median solution
